@@ -1,0 +1,1 @@
+A lightweight image viewer. Idea from [feep](https://github.com/poerin/Feep).
