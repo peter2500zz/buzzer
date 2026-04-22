@@ -1,3 +1,6 @@
+// hide the console on Windows when building in release mode
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::env;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -8,13 +11,15 @@ use image::{DynamicImage, GenericImageView};
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, OwnedDisplayHandle};
+use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 // Your app state — owns windows, renderers, etc.
 struct App {
-    // images: Vec<PathBuf>,
+    images: Vec<PathBuf>,
+    current_image_index: usize,
     current_image: DynamicImage,
 
     context: Context<OwnedDisplayHandle>,
@@ -22,8 +27,33 @@ struct App {
 }
 
 struct AppState {
-    // window: Rc<Window>,
+    window: Rc<Window>,
     surface: Surface<OwnedDisplayHandle, Rc<Window>>,
+}
+
+impl App {
+    fn change_image(&mut self, index: usize) {
+        self.current_image = image::open(&self.images[index]).unwrap();
+        let (w, h) = self.current_image.dimensions();
+
+        let _ = self
+            .state
+            .as_ref()
+            .unwrap()
+            .window
+            .request_inner_size(LogicalSize::new(w, h));
+
+        if let (Some(width), Some(height)) = (NonZeroU32::new(w), NonZeroU32::new(h)) {
+            self.state
+                .as_mut()
+                .unwrap()
+                .surface
+                .resize(width, height)
+                .unwrap();
+        }
+
+        self.state.as_ref().unwrap().window.request_redraw();
+    }
 }
 
 impl ApplicationHandler for App {
@@ -48,10 +78,7 @@ impl ApplicationHandler for App {
             surface.resize(width, height).unwrap();
         }
 
-        self.state = Some(AppState { 
-            // window, 
-            surface 
-        });
+        self.state = Some(AppState { window, surface });
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -74,6 +101,32 @@ impl ApplicationHandler for App {
 
                 buffer.present().unwrap();
             }
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        logical_key: Key::Named(named),
+                        state: ElementState::Pressed,
+                        ..
+                    },
+                ..
+            } => match named {
+                NamedKey::Escape => event_loop.exit(),
+                NamedKey::ArrowUp => println!("↑"),
+                NamedKey::ArrowDown => println!("↓"),
+                NamedKey::ArrowLeft => {
+                    if self.current_image_index == 0 {
+                        self.current_image_index = self.images.len() - 1;
+                    } else {
+                        self.current_image_index -= 1;
+                    }
+                    self.change_image(self.current_image_index);
+                }
+                NamedKey::ArrowRight => {
+                    self.current_image_index = (self.current_image_index + 1) % self.images.len();
+                    self.change_image(self.current_image_index);
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -93,7 +146,8 @@ fn main() -> Result<()> {
 
     let event_loop = EventLoop::new().unwrap();
     let mut app = App {
-        // images: args,
+        images: args,
+        current_image_index: 0,
         current_image: first_image,
         context: Context::new(event_loop.owned_display_handle()).unwrap(),
         state: None,
