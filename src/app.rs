@@ -12,7 +12,7 @@ use winit::event_loop::{ActiveEventLoop, OwnedDisplayHandle};
 use winit::window::{Window, WindowId};
 
 use crate::input::{Action, handle_input};
-use crate::render;
+use crate::render::{self, calculate_window_size};
 
 // Your app state — owns windows, renderers, etc.
 pub struct App {
@@ -25,8 +25,35 @@ pub struct App {
 }
 
 pub struct AppState {
-    window: Rc<Window>,
-    surface: Surface<OwnedDisplayHandle, Rc<Window>>,
+    pub window: Rc<Window>,
+    pub surface: Surface<OwnedDisplayHandle, Rc<Window>>,
+}
+
+impl AppState {
+    fn centered_resize_window(&mut self, width: u32, height: u32) {
+        let current_pos = self.window.outer_position().unwrap();
+        let current_size = self.window.outer_size();
+
+        let center_x = current_pos.x + current_size.width as i32 / 2;
+        let center_y = current_pos.y + current_size.height as i32 / 2;
+
+        let new_x = center_x - width as i32 / 2;
+        let new_y = center_y - height as i32 / 2;
+
+        self.window
+            .set_outer_position(PhysicalPosition::new(new_x, new_y));
+        self.resize_window(width, height);
+    }
+
+    fn resize_window(&mut self, width: u32, height: u32) {
+        let _ = self
+            .window
+            .request_inner_size(PhysicalSize::new(width, height));
+
+        if let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height)) {
+            self.surface.resize(width, height).unwrap();
+        }
+    }
 }
 
 impl App {
@@ -44,25 +71,9 @@ impl App {
 
     fn change_image(&mut self, index: usize) {
         self.current_image = image::open(&self.images[index]).unwrap();
-        let (w, h) = self.current_image.dimensions();
+        let (w, h) = calculate_window_size(self.state.as_ref().unwrap(), &self.current_image);
 
-        let _ = self
-            .state
-            .as_ref()
-            .unwrap()
-            .window
-            .request_inner_size(PhysicalSize::new(w, h));
-
-        if let (Some(width), Some(height)) = (NonZeroU32::new(w), NonZeroU32::new(h)) {
-            self.state
-                .as_mut()
-                .unwrap()
-                .surface
-                .resize(width, height)
-                .unwrap();
-        }
-
-        self.state.as_ref().unwrap().window.request_redraw();
+        self.state.as_mut().unwrap().centered_resize_window(w, h);
     }
 }
 
@@ -106,6 +117,8 @@ impl ApplicationHandler for App {
 
         match event {
             WindowEvent::RedrawRequested => {
+                println!("\nRedrawing...");
+
                 let mut buffer = state.surface.buffer_mut().unwrap();
 
                 render::render(&mut buffer, &self.current_image);
