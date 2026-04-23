@@ -7,13 +7,15 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::Result;
+use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView};
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, KeyEvent, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, OwnedDisplayHandle};
 use winit::keyboard::{Key, NamedKey};
+use winit::monitor;
 use winit::window::{Window, WindowId};
 
 // Your app state — owns windows, renderers, etc.
@@ -41,7 +43,7 @@ impl App {
             .as_ref()
             .unwrap()
             .window
-            .request_inner_size(LogicalSize::new(w, h));
+            .request_inner_size(PhysicalSize::new(w, h));
 
         if let (Some(width), Some(height)) = (NonZeroU32::new(w), NonZeroU32::new(h)) {
             self.state
@@ -61,10 +63,19 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let (w, h) = self.current_image.dimensions();
 
+        println!("Creating window with size {}x{}", w, h);
+
+        let monitor = event_loop.primary_monitor().unwrap();
+        let monitor_size = monitor.size();
+
+        let x = (monitor_size.width as i32 - w as i32) / 2;
+        let y = (monitor_size.height as i32 - h as i32) / 2;
+
         let attrs = Window::default_attributes()
-            .with_inner_size(LogicalSize::new(w, h))
+            .with_inner_size(PhysicalSize::new(w, h))
             .with_decorations(false)
-            .with_title("Buzzer");
+            .with_title("Buzzer")
+            .with_position(PhysicalPosition::new(x, y));
 
         let window = Rc::new(event_loop.create_window(attrs).unwrap());
 
@@ -76,23 +87,33 @@ impl ApplicationHandler for App {
         {
             // Resize surface
             surface.resize(width, height).unwrap();
+            println!("Resized surface to {}x{}", width, height);
         }
 
         self.state = Some(AppState { window, surface });
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        let state = self.state.as_mut().unwrap();
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
-                // render here
-                // self.state.as_ref().unwrap().window.request_redraw();
+                let mut buffer = state.surface.buffer_mut().unwrap();
 
-                let surface = &mut self.state.as_mut().unwrap().surface;
+                let buffer_size = (buffer.width().into(), buffer.height().into());
+                let image_size = self.current_image.dimensions();
 
-                let mut buffer = surface.buffer_mut().unwrap();
-
-                let rgba = self.current_image.to_rgba8();
+                let rgba = if buffer_size != image_size {
+                    let resized_image = self.current_image.clone().resize_exact(
+                        buffer_size.0,
+                        buffer_size.1,
+                        FilterType::Lanczos3,
+                    );
+                    resized_image.to_rgba8()
+                } else {
+                    self.current_image.to_rgba8()
+                };
 
                 for (dst, src) in buffer.iter_mut().zip(rgba.pixels()) {
                     let [r, g, b, _a] = src.0;
@@ -127,6 +148,15 @@ impl ApplicationHandler for App {
                 }
                 _ => {}
             },
+            WindowEvent::MouseWheel { delta, .. } => {
+                // let scroll = match delta {
+                //     MouseScrollDelta::LineDelta(_, y) => y,
+                //     MouseScrollDelta::PixelDelta(pos) => pos.y as f32 / 20.0,
+                // };
+
+                // const SCALE: f32 = 0.5;
+                // state.scale_window((1. + scroll) * SCALE);
+            }
             _ => {}
         }
     }
