@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::Result;
+use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView};
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
@@ -19,6 +20,7 @@ pub struct App {
     images: Vec<PathBuf>,
     current_image_index: usize,
     current_image: DynamicImage,
+    oversized_image_cache: Option<DynamicImage>,
 
     context: Context<OwnedDisplayHandle>,
     state: Option<AppState>,
@@ -72,6 +74,7 @@ impl App {
             images,
             current_image_index: 0,
             current_image: first_image,
+            oversized_image_cache: None,
             context,
             state: None,
         })
@@ -80,6 +83,14 @@ impl App {
     fn change_image(&mut self, index: usize) {
         self.current_image = image::open(&self.images[index]).unwrap();
         let (w, h) = calculate_window_size(self.state.as_ref().unwrap(), &self.current_image);
+
+        // 如果图片尺寸比最大可用尺寸还大，缓存一份缩放的小尺寸图片
+        if (w, h) < self.current_image.dimensions() {
+            self.oversized_image_cache =
+                Some(self.current_image.resize_exact(w, h, FilterType::Lanczos3))
+        } else {
+            self.oversized_image_cache = None;
+        }
 
         self.state.as_mut().unwrap().centered_resize_window(w, h);
     }
@@ -143,7 +154,25 @@ impl ApplicationHandler for App {
 
                 let mut buffer = state.surface.buffer_mut().unwrap();
 
-                render::render(&mut buffer, &self.current_image);
+                let image_size = self.current_image.dimensions();
+                let buffer_size = (buffer.width().into(), buffer.height().into());
+
+                // 如果有缓存的大图，进行额外判断
+                let rgba = if let Some(oversized) = &self.oversized_image_cache {
+                    if let Some(_zoom) = state.zoom_level {
+                        // 如果正在缩放，使用当前缩放级别计算新的尺寸并缩放图片
+                        self.current_image
+                            .crop_imm(0, 0, buffer_size.0, buffer_size.1)
+                            .to_rgba8()
+                    } else {
+                        oversized.to_rgba8()
+                    }
+                } else {
+                    println!("No resizing needed for image of size {:?}", image_size);
+                    self.current_image.to_rgba8()
+                };
+
+                render::render(&mut buffer, buffer_size, &rgba);
 
                 buffer.present().unwrap();
             }
@@ -152,10 +181,18 @@ impl ApplicationHandler for App {
                 if let Some(action) = handle_input(&event, state) {
                     match action {
                         Action::ZoomIn => {
-                            state.zoom_level = Some(1.);
+                            if self.oversized_image_cache.is_some() {
+                                println!("Zooming in...");
+                                state.zoom_level = Some(1.);
+                                state.window.request_redraw();
+                            }
                         }
                         Action::ZoomOut => {
-                            state.zoom_level = None;
+                            if self.oversized_image_cache.is_some() {
+                                println!("Zooming out...");
+                                state.zoom_level = None;
+                                state.window.request_redraw();
+                            }
                         }
 
                         Action::PreviousImage => {

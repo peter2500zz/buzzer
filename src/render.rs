@@ -1,8 +1,4 @@
-use std::rc::Rc;
-
-use image::{DynamicImage, GenericImageView, imageops::FilterType};
-use softbuffer::Buffer;
-use winit::{event_loop::OwnedDisplayHandle, window::Window};
+use image::{DynamicImage, GenericImageView, RgbaImage};
 
 use crate::app::AppState;
 
@@ -111,16 +107,10 @@ fn copy_rgba_to(
     }
 }
 
-pub fn render(buffer: &mut Buffer<OwnedDisplayHandle, Rc<Window>>, image: &DynamicImage) {
-    let buffer_size = (buffer.width().into(), buffer.height().into());
+pub fn render(buffer: &mut [u32], buffer_size: (u32, u32), image: &RgbaImage) {
     let image_size = image.dimensions();
 
     // 如果缓冲区比图片大，图片居中原始尺寸绘制
-    // 如果缓冲区比图片小，图片缩放到缓冲区大小绘制
-
-    //
-
-    // return;
     if buffer_size > image_size {
         draw_checkerboard(buffer, buffer_size.0, buffer_size.1);
 
@@ -128,7 +118,7 @@ pub fn render(buffer: &mut Buffer<OwnedDisplayHandle, Rc<Window>>, image: &Dynam
             buffer,
             buffer_size.0,
             buffer_size.1,
-            &image.to_rgba8(),
+            &image,
             (buffer_size.0 as i32 - image_size.0 as i32) / 2,
             (buffer_size.1 as i32 - image_size.1 as i32) / 2,
         );
@@ -136,21 +126,5 @@ pub fn render(buffer: &mut Buffer<OwnedDisplayHandle, Rc<Window>>, image: &Dynam
         return;
     }
 
-    let rgba = if buffer_size < image_size {
-        println!("Resizing image from {:?} to {:?}", image_size, buffer_size);
-
-        let resized_image =
-            image
-                .clone()
-                .resize_exact(buffer_size.0, buffer_size.1, FilterType::Lanczos3);
-        resized_image.to_rgba8()
-    } else {
-        println!("No resizing needed for image of size {:?}", image_size);
-        image.to_rgba8()
-    };
-
-    for (dst, src) in buffer.iter_mut().zip(rgba.pixels()) {
-        let [r, g, b, _a] = src.0;
-        *dst = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
-    }
+    copy_rgba_to(buffer, buffer_size.0, buffer_size.1, &image, 0, 0);
 }
