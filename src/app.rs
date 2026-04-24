@@ -153,7 +153,7 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
-                println!("\nRedrawing...");
+                // println!("\nRedrawing...");
 
                 let mouse_percent = calculate_mouse_percent(state);
                 let mut buffer = state.surface.buffer_mut().unwrap();

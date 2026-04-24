@@ -7,15 +7,29 @@ pub const MIN_SIZE: u32 = 200;
 pub const DEAD_ZONE: u32 = MIN_SIZE / 2;
 
 pub fn calculate_window_size(state: &AppState, image: &DynamicImage) -> (u32, u32) {
-    // 最大不能比显示器 * MAX_SCALE 大
-    // 最小不能比 MIN_SIZE 小
-
     let (img_w, img_h) = image.dimensions();
     let (disp_w, disp_h): (f32, f32) = state.window.current_monitor().unwrap().size().into();
 
-    let w = img_w.clamp(MIN_SIZE, (disp_w * MAX_SCALE) as u32);
-    let h = img_h.clamp(MIN_SIZE, (disp_h * MAX_SCALE) as u32);
+    let max_w = disp_w * MAX_SCALE;
+    let max_h = disp_h * MAX_SCALE;
 
+    // 等比缩小：取宽、高缩放比中更严格（更小）的那个，且不放大
+    let scale = (max_w / img_w as f32).min(max_h / img_h as f32).min(1.0);
+
+    let scaled_w = img_w as f32 * scale;
+    let scaled_h = img_h as f32 * scale;
+
+    // 等比放大：若缩后仍小于 MIN_SIZE，取两边中需要放大更多的那个
+    let scale_up = (MIN_SIZE as f32 / scaled_w)
+        .max(MIN_SIZE as f32 / scaled_h)
+        .max(1.0);
+
+    let w = (scaled_w * scale_up).round() as u32;
+    let h = (scaled_h * scale_up).round() as u32;
+
+    println!(
+        "Calculated window size: image=({img_w}x{img_h}), display=({disp_w}x{disp_h}), result=({w}x{h})"
+    );
     (w, h)
 }
 
