@@ -1,5 +1,5 @@
 use winit::{
-    event::{ElementState, KeyEvent, WindowEvent},
+    event::{ElementState, KeyEvent, MouseButton, WindowEvent},
     keyboard::{Key, NamedKey},
 };
 
@@ -9,11 +9,27 @@ pub enum Action {
     NextImage,
     PreviousImage,
 
+    ZoomIn,
+    ZoomOut,
+
     Quit,
 }
 
 pub fn handle_input(event: &WindowEvent, _state: &mut AppState) -> Option<Action> {
     match event {
+        WindowEvent::MouseInput { state, button, .. } => {
+            match (button, state) {
+                (MouseButton::Left, ElementState::Pressed) => {
+                    Some(Action::ZoomIn)
+                },
+                (MouseButton::Left, ElementState::Released) => {
+                    Some(Action::ZoomOut)
+                },
+
+                _ => None,
+            }
+        }
+
         WindowEvent::KeyboardInput {
             event:
                 KeyEvent {

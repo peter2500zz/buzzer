@@ -25,8 +25,16 @@ pub struct App {
 }
 
 pub struct AppState {
+    // just the window
     pub window: Rc<Window>,
+    // canvases for drawing to the window
     pub surface: Surface<OwnedDisplayHandle, Rc<Window>>,
+
+    // mouse pos
+    mouse_pos: PhysicalPosition<f64>,
+
+    // if Some, means zooming
+    zoom_level: Option<f32>,
 }
 
 impl AppState {
@@ -82,11 +90,10 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let (w, h) = self.current_image.dimensions();
 
-        println!("Creating window with size {}x{}", w, h);
-
         let monitor = event_loop.primary_monitor().unwrap();
         let monitor_size = monitor.size();
 
+        // make sure the window is at the center of the screen
         let x = (monitor_size.width as i32 - w as i32) / 2;
         let y = (monitor_size.height as i32 - h as i32) / 2;
 
@@ -97,25 +104,40 @@ impl ApplicationHandler for App {
             .with_position(PhysicalPosition::new(x, y));
 
         let window = Rc::new(event_loop.create_window(attrs).unwrap());
+        // sometimes the initial size is not image size, so request it again
+        let _ = window.request_inner_size(PhysicalSize::new(w, h));
 
         let mut surface = Surface::new(&self.context, Rc::clone(&window)).unwrap();
 
         let size = window.inner_size();
+
+        println!("Creating window with size {}x{}", size.width, size.height);
+
         if let (Some(width), Some(height)) =
             (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
         {
             // Resize surface
             surface.resize(width, height).unwrap();
-            println!("Resized surface to {}x{}", width, height);
+            println!("Surface initialized to {}x{}", width, height);
         }
 
-        self.state = Some(AppState { window, surface });
+        self.state = Some(AppState {
+            window,
+            surface,
+
+            mouse_pos: PhysicalPosition::new(0.0, 0.0),
+            zoom_level: None,
+        });
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let state = self.state.as_mut().unwrap();
 
         match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                state.mouse_pos = position;
+            }
+
             WindowEvent::RedrawRequested => {
                 println!("\nRedrawing...");
 
@@ -129,6 +151,13 @@ impl ApplicationHandler for App {
             _ => {
                 if let Some(action) = handle_input(&event, state) {
                     match action {
+                        Action::ZoomIn => {
+                            state.zoom_level = Some(1.);
+                        }
+                        Action::ZoomOut => {
+                            state.zoom_level = None;
+                        }
+
                         Action::PreviousImage => {
                             if self.current_image_index == 0 {
                                 self.current_image_index = self.images.len() - 1;
