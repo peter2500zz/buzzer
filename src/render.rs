@@ -2,12 +2,13 @@ use image::{DynamicImage, GenericImageView, RgbaImage};
 
 use crate::app::AppState;
 
+pub const MAX_SCALE: f32 = 0.8;
+pub const MIN_SIZE: u32 = 200;
+pub const DEAD_ZONE: u32 = MIN_SIZE / 2;
+
 pub fn calculate_window_size(state: &AppState, image: &DynamicImage) -> (u32, u32) {
     // 最大不能比显示器 * MAX_SCALE 大
     // 最小不能比 MIN_SIZE 小
-
-    const MAX_SCALE: f32 = 0.8;
-    const MIN_SIZE: u32 = 200;
 
     let (img_w, img_h) = image.dimensions();
     let (disp_w, disp_h): (f32, f32) = state.window.current_monitor().unwrap().size().into();
@@ -16,6 +17,30 @@ pub fn calculate_window_size(state: &AppState, image: &DynamicImage) -> (u32, u3
     let h = img_h.clamp(MIN_SIZE, (disp_h * MAX_SCALE) as u32);
 
     (w, h)
+}
+
+/// 计算鼠标在窗口中的相对位置百分比，考虑了边缘的死区
+pub fn calculate_mouse_percent(state: &AppState) -> (f32, f32) {
+    let size = state.window.inner_size();
+    let (w, h) = (size.width, size.height);
+
+    let mouse_x = state.mouse_pos.x as f32;
+    let mouse_y = state.mouse_pos.y as f32;
+
+    let calc_axis = |pos: f32, length: u32| -> f32 {
+        let dead = DEAD_ZONE as f32;
+        let effective = (length as f32) - 2.0 * dead;
+
+        if pos <= dead {
+            0.0
+        } else if pos >= (length as f32) - dead {
+            1.0
+        } else {
+            ((pos - dead) / effective).clamp(0.0, 1.0)
+        }
+    };
+
+    (calc_axis(mouse_x, w), calc_axis(mouse_y, h))
 }
 
 #[inline(always)]

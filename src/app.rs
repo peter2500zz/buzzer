@@ -13,7 +13,7 @@ use winit::event_loop::{ActiveEventLoop, OwnedDisplayHandle};
 use winit::window::{Window, WindowId};
 
 use crate::input::{Action, handle_input};
-use crate::render::{self, calculate_window_size};
+use crate::render::{self, calculate_mouse_percent, calculate_window_size};
 
 // Your app state — owns windows, renderers, etc.
 pub struct App {
@@ -33,10 +33,10 @@ pub struct AppState {
     pub surface: Surface<OwnedDisplayHandle, Rc<Window>>,
 
     // mouse pos
-    mouse_pos: PhysicalPosition<f64>,
+    pub mouse_pos: PhysicalPosition<f64>,
 
     // if Some, means zooming
-    zoom_level: Option<f32>,
+    pub zoom_level: Option<f32>,
 }
 
 impl AppState {
@@ -147,11 +147,15 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CursorMoved { position, .. } => {
                 state.mouse_pos = position;
+                if state.zoom_level.is_some() {
+                    state.window.request_redraw();
+                }
             }
 
             WindowEvent::RedrawRequested => {
                 println!("\nRedrawing...");
 
+                let mouse_percent = calculate_mouse_percent(state);
                 let mut buffer = state.surface.buffer_mut().unwrap();
 
                 let image_size = self.current_image.dimensions();
@@ -159,11 +163,32 @@ impl ApplicationHandler for App {
 
                 // 如果有缓存的大图，进行额外判断
                 let rgba = if let Some(oversized) = &self.oversized_image_cache {
-                    if let Some(_zoom) = state.zoom_level {
-                        // 如果正在缩放，使用当前缩放级别计算新的尺寸并缩放图片
-                        self.current_image
-                            .crop_imm(0, 0, buffer_size.0, buffer_size.1)
-                            .to_rgba8()
+                    if let Some(zoom) = state.zoom_level {
+                        // 裁切窗口大小 = buffer / zoom，zoom=1.0 则1:1像素
+                        let crop_w = (buffer_size.0 as f32 / zoom) as u32;
+                        let crop_h = (buffer_size.1 as f32 / zoom) as u32;
+
+                        // 鼠标指向的原图坐标
+                        let cx = (image_size.0 as f32 * mouse_percent.0) as i32;
+                        let cy = (image_size.1 as f32 * mouse_percent.1) as i32;
+
+                        // 以鼠标为中心，clamp 防止越界
+                        let x0 = (cx - crop_w as i32 / 2).clamp(0, (image_size.0 - crop_w) as i32)
+                            as u32;
+                        let y0 = (cy - crop_h as i32 / 2).clamp(0, (image_size.1 - crop_h) as i32)
+                            as u32;
+
+                        let cropped = self.current_image.crop_imm(x0, y0, crop_w, crop_h);
+
+                        let rgba = if crop_w == buffer_size.0 && crop_h == buffer_size.1 {
+                            cropped.to_rgba8()
+                        } else {
+                            cropped
+                                .resize_exact(buffer_size.0, buffer_size.1, FilterType::Lanczos3)
+                                .to_rgba8()
+                        };
+
+                        rgba
                     } else {
                         oversized.to_rgba8()
                     }
