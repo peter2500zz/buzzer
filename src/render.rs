@@ -6,9 +6,9 @@ pub const MAX_SCALE: f32 = 0.8;
 pub const MIN_SIZE: u32 = 200;
 pub const DEAD_ZONE: u32 = MIN_SIZE / 2;
 
-pub fn calculate_window_size(state: &AppState, image: &DynamicImage) -> (u32, u32) {
+pub fn calculate_window_size(monitor_size: (u32, u32), image: &DynamicImage) -> (u32, u32) {
     let (img_w, img_h) = image.dimensions();
-    let (disp_w, disp_h): (f32, f32) = state.window.current_monitor().unwrap().size().into();
+    let (disp_w, disp_h) = (monitor_size.0 as f32, monitor_size.1 as f32);
 
     let max_w = disp_w * MAX_SCALE;
     let max_h = disp_h * MAX_SCALE;

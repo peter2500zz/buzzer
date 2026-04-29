@@ -82,29 +82,39 @@ impl App {
 
     fn change_image(&mut self, index: usize) {
         self.current_image = image::open(&self.images[index]).unwrap();
-        let (w, h) = calculate_window_size(self.state.as_ref().unwrap(), &self.current_image);
+
+        let monitor_size = self.state.as_ref().unwrap().window.current_monitor().unwrap().size();
+        let (w, h) = calculate_window_size((monitor_size.width, monitor_size.height), &self.current_image);
 
         // 如果图片尺寸比最大可用尺寸还大，缓存一份缩放的小尺寸图片
         if (w, h) < self.current_image.dimensions() {
             self.oversized_image_cache =
-                Some(self.current_image.resize_exact(w, h, FilterType::Lanczos3))
+                Some(self.current_image.resize_exact(w, h, FilterType::Lanczos3));
         } else {
             self.oversized_image_cache = None;
         }
 
-        self.state.as_mut().unwrap().centered_resize_window(w, h);
+        let state = self.state.as_mut().unwrap();
+        state.zoom_level = None;
+        state.centered_resize_window(w, h);
+        state.window.request_redraw();
     }
 }
 
 impl ApplicationHandler for App {
     // Platform signals ready — create windows here
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let (w, h) = self.current_image.dimensions();
-
         let monitor = event_loop.primary_monitor().unwrap();
         let monitor_size = monitor.size();
 
-        // make sure the window is at the center of the screen
+        let (w, h) = calculate_window_size((monitor_size.width, monitor_size.height), &self.current_image);
+
+        // 如果第一张图超大，提前初始化缓存
+        if (w, h) < self.current_image.dimensions() {
+            self.oversized_image_cache =
+                Some(self.current_image.resize_exact(w, h, FilterType::Lanczos3));
+        }
+
         let x = (monitor_size.width as i32 - w as i32) / 2;
         let y = (monitor_size.height as i32 - h as i32) / 2;
 
@@ -115,21 +125,15 @@ impl ApplicationHandler for App {
             .with_position(PhysicalPosition::new(x, y));
 
         let window = Rc::new(event_loop.create_window(attrs).unwrap());
-        // sometimes the initial size is not image size, so request it again
         let _ = window.request_inner_size(PhysicalSize::new(w, h));
 
         let mut surface = Surface::new(&self.context, Rc::clone(&window)).unwrap();
 
         let size = window.inner_size();
-
-        println!("Creating window with size {}x{}", size.width, size.height);
-
         if let (Some(width), Some(height)) =
             (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
         {
-            // Resize surface
             surface.resize(width, height).unwrap();
-            println!("Surface initialized to {}x{}", width, height);
         }
 
         self.state = Some(AppState {
@@ -145,6 +149,15 @@ impl ApplicationHandler for App {
         let state = self.state.as_mut().unwrap();
 
         match event {
+            WindowEvent::Resized(size) => {
+                if let (Some(w), Some(h)) =
+                    (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
+                {
+                    state.surface.resize(w, h).unwrap();
+                }
+                state.window.request_redraw();
+            }
+
             WindowEvent::CursorMoved { position, .. } => {
                 state.mouse_pos = position;
                 if state.zoom_level.is_some() {

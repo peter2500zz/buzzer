@@ -25,6 +25,9 @@ pub fn handle_input(event: &WindowEvent, _state: &mut AppState) -> Option<Action
                 (MouseButton::Left, ElementState::Released) => {
                     Some(Action::ZoomOut)
                 },
+                (MouseButton::Right, ElementState::Released) => {
+                    Some(Action::Quit)
+                }
 
                 _ => None,
             }
