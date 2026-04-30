@@ -13,9 +13,8 @@ use winit::event_loop::{ActiveEventLoop, OwnedDisplayHandle};
 use winit::window::{Window, WindowId};
 
 use crate::input::{Action, handle_input};
-use crate::render::{self, calculate_mouse_percent, calculate_window_size};
+use crate::render::{self, calculate_display_size, calculate_mouse_percent, calculate_window_size};
 
-// Your app state — owns windows, renderers, etc.
 pub struct App {
     images: Vec<PathBuf>,
     current_image_index: usize,
@@ -27,41 +26,27 @@ pub struct App {
 }
 
 pub struct AppState {
-    // just the window
     pub window: Rc<Window>,
-    // canvases for drawing to the window
     pub surface: Surface<OwnedDisplayHandle, Rc<Window>>,
-
-    // mouse pos
     pub mouse_pos: PhysicalPosition<f64>,
-
-    // if Some, means zooming
     pub zoom_level: Option<f32>,
 }
 
 impl AppState {
     fn centered_resize_window(&mut self, width: u32, height: u32) {
-        let current_pos = self.window.outer_position().unwrap();
-        let current_size = self.window.outer_size();
+        let pos = self.window.outer_position().unwrap();
+        let size = self.window.outer_size();
 
-        let center_x = current_pos.x + current_size.width as i32 / 2;
-        let center_y = current_pos.y + current_size.height as i32 / 2;
-
-        let new_x = center_x - width as i32 / 2;
-        let new_y = center_y - height as i32 / 2;
+        let new_x = pos.x + size.width as i32 / 2 - width as i32 / 2;
+        let new_y = pos.y + size.height as i32 / 2 - height as i32 / 2;
 
         self.window
             .set_outer_position(PhysicalPosition::new(new_x, new_y));
-        self.resize_window(width, height);
-    }
-
-    fn resize_window(&mut self, width: u32, height: u32) {
         let _ = self
             .window
             .request_inner_size(PhysicalSize::new(width, height));
-
-        if let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height)) {
-            self.surface.resize(width, height).unwrap();
+        if let (Some(w), Some(h)) = (NonZeroU32::new(width), NonZeroU32::new(height)) {
+            self.surface.resize(w, h).unwrap();
         }
     }
 }
@@ -81,65 +66,84 @@ impl App {
     }
 
     fn change_image(&mut self, index: usize) {
-        self.current_image = image::open(&self.images[index]).unwrap();
+        // 快速读取尺寸，先 resize 窗口，再加载完整图片和缓存
+        let img_dims = image::image_dimensions(&self.images[index]).unwrap();
+        let monitor_size = {
+            let s = self
+                .state
+                .as_ref()
+                .unwrap()
+                .window
+                .current_monitor()
+                .unwrap()
+                .size();
+            (s.width, s.height)
+        };
+        let (win_w, win_h) = calculate_window_size(monitor_size, img_dims);
+        let (disp_w, disp_h) = calculate_display_size(monitor_size, img_dims);
 
-        let monitor_size = self.state.as_ref().unwrap().window.current_monitor().unwrap().size();
-        let (w, h) = calculate_window_size((monitor_size.width, monitor_size.height), &self.current_image);
-
-        // 如果图片尺寸比最大可用尺寸还大，缓存一份缩放的小尺寸图片
-        if (w, h) < self.current_image.dimensions() {
-            self.oversized_image_cache =
-                Some(self.current_image.resize_exact(w, h, FilterType::Lanczos3));
-        } else {
-            self.oversized_image_cache = None;
+        {
+            let state = self.state.as_mut().unwrap();
+            state.zoom_level = None;
+            state.centered_resize_window(win_w, win_h);
         }
 
-        let state = self.state.as_mut().unwrap();
-        state.zoom_level = None;
-        state.centered_resize_window(w, h);
-        state.window.request_redraw();
+        self.current_image = image::open(&self.images[index]).unwrap();
+        self.oversized_image_cache = if (disp_w, disp_h) < img_dims {
+            Some(
+                self.current_image
+                    .resize_exact(disp_w, disp_h, FilterType::Lanczos3),
+            )
+        } else {
+            None
+        };
+
+        self.state.as_mut().unwrap().window.request_redraw();
     }
 }
 
 impl ApplicationHandler for App {
-    // Platform signals ready — create windows here
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let monitor = event_loop.primary_monitor().unwrap();
-        let monitor_size = monitor.size();
+        let monitor_size = (monitor.size().width, monitor.size().height);
+        let img_dims = self.current_image.dimensions();
 
-        let (w, h) = calculate_window_size((monitor_size.width, monitor_size.height), &self.current_image);
+        let (win_w, win_h) = calculate_window_size(monitor_size, img_dims);
+        let (disp_w, disp_h) = calculate_display_size(monitor_size, img_dims);
 
-        // 如果第一张图超大，提前初始化缓存
-        if (w, h) < self.current_image.dimensions() {
-            self.oversized_image_cache =
-                Some(self.current_image.resize_exact(w, h, FilterType::Lanczos3));
+        if (disp_w, disp_h) < img_dims {
+            self.oversized_image_cache = Some(self.current_image.resize_exact(
+                disp_w,
+                disp_h,
+                FilterType::Lanczos3,
+            ));
         }
 
-        let x = (monitor_size.width as i32 - w as i32) / 2;
-        let y = (monitor_size.height as i32 - h as i32) / 2;
+        let x = (monitor_size.0 as i32 - win_w as i32) / 2;
+        let y = (monitor_size.1 as i32 - win_h as i32) / 2;
 
-        let attrs = Window::default_attributes()
-            .with_inner_size(PhysicalSize::new(w, h))
-            .with_decorations(false)
-            .with_title("Buzzer")
-            .with_position(PhysicalPosition::new(x, y));
-
-        let window = Rc::new(event_loop.create_window(attrs).unwrap());
-        let _ = window.request_inner_size(PhysicalSize::new(w, h));
+        let window = Rc::new(
+            event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_inner_size(PhysicalSize::new(win_w, win_h))
+                        .with_decorations(false)
+                        .with_title("Buzzer")
+                        .with_position(PhysicalPosition::new(x, y)),
+                )
+                .unwrap(),
+        );
+        let _ = window.request_inner_size(PhysicalSize::new(win_w, win_h));
 
         let mut surface = Surface::new(&self.context, Rc::clone(&window)).unwrap();
-
         let size = window.inner_size();
-        if let (Some(width), Some(height)) =
-            (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
-        {
-            surface.resize(width, height).unwrap();
+        if let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) {
+            surface.resize(w, h).unwrap();
         }
 
         self.state = Some(AppState {
             window,
             surface,
-
             mouse_pos: PhysicalPosition::new(0.0, 0.0),
             zoom_level: None,
         });
@@ -166,26 +170,22 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::RedrawRequested => {
-                // println!("\nRedrawing...");
-
                 let mouse_percent = calculate_mouse_percent(state);
                 let mut buffer = state.surface.buffer_mut().unwrap();
 
                 let image_size = self.current_image.dimensions();
                 let buffer_size = (buffer.width().into(), buffer.height().into());
 
-                // 如果有缓存的大图，进行额外判断
                 let rgba = if let Some(oversized) = &self.oversized_image_cache {
                     if let Some(zoom) = state.zoom_level {
-                        // 裁切窗口大小 = buffer / zoom，zoom=1.0 则1:1像素
-                        let crop_w = (buffer_size.0 as f32 / zoom) as u32;
-                        let crop_h = (buffer_size.1 as f32 / zoom) as u32;
+                        let unclamped_w = (buffer_size.0 as f32 / zoom) as u32;
+                        let unclamped_h = (buffer_size.1 as f32 / zoom) as u32;
+                        let crop_w = unclamped_w.min(image_size.0);
+                        let crop_h = unclamped_h.min(image_size.1);
 
-                        // 鼠标指向的原图坐标
                         let cx = (image_size.0 as f32 * mouse_percent.0) as i32;
                         let cy = (image_size.1 as f32 * mouse_percent.1) as i32;
 
-                        // 以鼠标为中心，clamp 防止越界
                         let x0 = (cx - crop_w as i32 / 2).clamp(0, (image_size.0 - crop_w) as i32)
                             as u32;
                         let y0 = (cy - crop_h as i32 / 2).clamp(0, (image_size.1 - crop_h) as i32)
@@ -193,25 +193,22 @@ impl ApplicationHandler for App {
 
                         let cropped = self.current_image.crop_imm(x0, y0, crop_w, crop_h);
 
-                        let rgba = if crop_w == buffer_size.0 && crop_h == buffer_size.1 {
-                            cropped.to_rgba8()
-                        } else {
+                        let was_clamped = crop_w < unclamped_w || crop_h < unclamped_h;
+                        if !was_clamped && (crop_w != buffer_size.0 || crop_h != buffer_size.1) {
                             cropped
                                 .resize_exact(buffer_size.0, buffer_size.1, FilterType::Lanczos3)
                                 .to_rgba8()
-                        };
-
-                        rgba
+                        } else {
+                            cropped.to_rgba8()
+                        }
                     } else {
                         oversized.to_rgba8()
                     }
                 } else {
-                    println!("No resizing needed for image of size {:?}", image_size);
                     self.current_image.to_rgba8()
                 };
 
                 render::render(&mut buffer, buffer_size, &rgba);
-
                 buffer.present().unwrap();
             }
 
@@ -220,25 +217,22 @@ impl ApplicationHandler for App {
                     match action {
                         Action::ZoomIn => {
                             if self.oversized_image_cache.is_some() {
-                                println!("Zooming in...");
-                                state.zoom_level = Some(1.);
+                                state.zoom_level = Some(1.0);
                                 state.window.request_redraw();
                             }
                         }
                         Action::ZoomOut => {
                             if self.oversized_image_cache.is_some() {
-                                println!("Zooming out...");
                                 state.zoom_level = None;
                                 state.window.request_redraw();
                             }
                         }
-
                         Action::PreviousImage => {
-                            if self.current_image_index == 0 {
-                                self.current_image_index = self.images.len() - 1;
+                            self.current_image_index = if self.current_image_index == 0 {
+                                self.images.len() - 1
                             } else {
-                                self.current_image_index -= 1;
-                            }
+                                self.current_image_index - 1
+                            };
                             self.change_image(self.current_image_index);
                         }
                         Action::NextImage => {
@@ -246,7 +240,6 @@ impl ApplicationHandler for App {
                                 (self.current_image_index + 1) % self.images.len();
                             self.change_image(self.current_image_index);
                         }
-
                         Action::Quit => event_loop.exit(),
                     }
                 }
